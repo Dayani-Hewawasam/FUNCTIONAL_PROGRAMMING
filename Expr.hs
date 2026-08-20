@@ -16,6 +16,9 @@ data Expr
   | Sub Expr Expr
   | Mul Expr Expr
   | Div Expr Expr
+  | Neg Expr                   -- arithmetic negation, e.g. -x
+  | Pow Expr Expr              -- exponentiation, e.g. x ^ 2
+  | IfZero Expr Expr Expr      -- if condition == 0 then e1 else e2
   | Let String Expr Expr        -- Let x = e1 in e2   (extension constructor)
   deriving (Show, Eq)
 
@@ -44,12 +47,24 @@ eval env (Add l r) = binOp (+) env l r
 eval env (Sub l r) = binOp (-) env l r
 eval env (Mul l r) = binOp (*) env l r
 
+eval env (Neg e) = do
+  value <- eval env e
+  Right (-value)
+
+eval env (Pow l r) = binOp (**) env l r
+
 eval env (Div l r) = do
   lv <- eval env l
   rv <- eval env r
   if rv == 0
     then Left "division by zero"
     else Right (lv / rv)
+
+eval env (IfZero condition whenZero whenNonZero) = do
+  value <- eval env condition
+  if value == 0
+    then eval env whenZero
+    else eval env whenNonZero
 
 eval env (Let x e1 e2) = do
   v <- eval env e1                 -- evaluate the bound expression first
@@ -76,7 +91,11 @@ simplify :: Expr -> Expr
 simplify (Add l r) = simplifyAdd (simplify l) (simplify r)
 simplify (Sub l r) = simplifySub (simplify l) (simplify r)
 simplify (Mul l r) = simplifyMul (simplify l) (simplify r)
+simplify (Neg e) = simplifyNeg (simplify e)
+simplify (Pow l r) = simplifyPow (simplify l) (simplify r)
 simplify (Div l r) = Div (simplify l) (simplify r)
+simplify (IfZero condition whenZero whenNonZero) =
+  simplifyIfZero (simplify condition) (simplify whenZero) (simplify whenNonZero)
 simplify (Let x e1 e2) = Let x (simplify e1) (simplify e2)
 simplify e = e   -- Lit and Var are already as simple as possible
 
@@ -97,6 +116,22 @@ simplifyMul (Lit 0) _ = Lit 0          -- 0 * x -> 0
 simplifyMul l (Lit 1) = l              -- x * 1 -> x
 simplifyMul (Lit 1) r = r              -- 1 * x -> x
 simplifyMul l r       = Mul l r
+
+simplifyNeg :: Expr -> Expr
+simplifyNeg (Lit 0) = Lit 0
+simplifyNeg (Neg e) = e              -- -(-x) -> x
+simplifyNeg e       = Neg e
+
+simplifyPow :: Expr -> Expr -> Expr
+simplifyPow _ (Lit 0) = Lit 1         -- x ^ 0 -> 1
+simplifyPow l (Lit 1) = l              -- x ^ 1 -> x
+simplifyPow l r       = Pow l r
+
+simplifyIfZero :: Expr -> Expr -> Expr -> Expr
+simplifyIfZero (Lit 0) whenZero _ = whenZero
+simplifyIfZero (Lit _) _ whenNonZero = whenNonZero
+simplifyIfZero condition whenZero whenNonZero =
+  IfZero condition whenZero whenNonZero
 
 
 -- Evaluate a batch of expressions against a shared environment,
@@ -148,6 +183,18 @@ sample4 = Let "a" (Lit 5) (Mul (Var "a") (Var "a"))
 sample5 :: Expr
 sample5 = Add (Var "x") (Lit 0)
 
+-- -x ^ 2
+sample6 :: Expr
+sample6 = Neg (Pow (Var "x") (Lit 2))
+
+-- if x is zero then 100 else x ^ 2
+sample7 :: Expr
+sample7 = IfZero (Var "x") (Lit 100) (Pow (Var "x") (Lit 2))
+
+-- let n = 3 in n ^ 2
+sample8 :: Expr
+sample8 = Let "n" (Lit 3) (Pow (Var "n") (Lit 2))
+
 main :: IO ()
 main = do
   putStrLn "== eval demos =="
@@ -155,10 +202,16 @@ main = do
   print (eval sampleEnv sample2)   -- Left "division by zero"
   print (eval sampleEnv sample3)   -- Left "undefined variable: z"
   print (eval sampleEnv sample4)   -- Right 25.0
+  print (eval sampleEnv sample6)   -- Right (-100.0)
+  print (eval sampleEnv sample7)   -- Right 100.0
+  print (eval sampleEnv sample8)   -- Right 9.0
 
   putStrLn "\n== simplify demo =="
   print sample5                    -- Add (Var "x") (Lit 0)
   print (simplify sample5)         -- Var "x"
+  print (simplify (Neg (Neg (Var "x")))) -- Var "x"
+  print (simplify (Pow (Var "x") (Lit 1))) -- Var "x"
+  print (simplify (IfZero (Lit 0) (Lit 7) (Lit 9))) -- Lit 7
 
   putStrLn "\n== evalBatch / batchReport demo =="
   let batch = [sample1, sample2, sample3, sample4]
